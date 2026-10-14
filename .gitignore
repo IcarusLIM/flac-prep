@@ -1,0 +1,49 @@
+# Python environments, bytecode and build artifacts
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local music, exports and processing records
+/data/
+/output/
+/tmp/
+.flac-mgr/
+.flac-mgr-stage-*/
+*.flac
+*.lrc
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.f64
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Editor and OS files
+.DS_Store
+._*
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

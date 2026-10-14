@@ -1,0 +1,5 @@
+mutagen>=1.47,<2
+numpy>=1.26,<3
+Pillow>=10,<13
+soxr>=0.5,<2
+imageio-ffmpeg>=0.5,<1
