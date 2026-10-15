@@ -2,7 +2,7 @@
 
 本地 FLAC 批量整理命令行工具。读取已有标签，按 `歌名-歌手[专辑].flac` 导出，保留封面与歌词；缺内嵌歌词时，自动嵌入同目录同名 LRC。所有处理都写入独立输出目录，源文件保持不变。
 
-当前支持 macOS/Linux、Python 3.10+，以本地 FLAC 及配套歌词、封面为输入。完整规则见 [SPEC-MUSICDL.md](SPEC-MUSICDL.md)。
+当前支持 Windows/macOS/Linux、Python 3.10+，以本地 FLAC 及配套歌词、封面为输入。完整规则见 [SPEC-MUSICDL.md](SPEC-MUSICDL.md)。
 
 ## 安装
 
@@ -11,7 +11,18 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-依赖包含 Mutagen、NumPy、Pillow、Python-soxr 和 imageio-ffmpeg。优先使用 PATH 中的 FFmpeg，否则使用 imageio-ffmpeg 随包提供的二进制。也可以用 `--ffmpeg /absolute/path/to/ffmpeg` 或环境变量 `FLAC_MGR_FFMPEG` 指定后端。libsoxr 重采样通过 Python 绑定执行，不要求 FFmpeg 自身编译 libsoxr。
+Windows（PowerShell）：
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe cli.py preview
+.\.venv\Scripts\python.exe cli.py export
+```
+
+下文的 `.venv/bin/python` 在 Windows 上替换为 `.\.venv\Scripts\python.exe`。
+
+依赖包含 Mutagen、NumPy、Pillow、Python-soxr、imageio-ffmpeg 和 portalocker。优先使用 PATH 中的 FFmpeg，否则使用 imageio-ffmpeg 随包提供的二进制。也可以用 `--ffmpeg /absolute/path/to/ffmpeg` 或环境变量 `FLAC_MGR_FFMPEG` 指定后端。libsoxr 重采样通过 Python 绑定执行，不要求 FFmpeg 自身编译 libsoxr。
 
 项目无需 pip install，只安装依赖即可。当前已准备好 `.venv`，直接运行根目录的 `cli.py`。代码平铺在项目根目录：`cli.py` 负责命令入口，`core.py` 负责扫描、命名、标签和任务流程，`audio.py` 负责音频处理。
 
@@ -83,7 +94,7 @@ music/
 
 再次运行时，只有记录和所有文件校验一致才显示 `already_done`。若 LRC、源文件、配置或输出发生变化，会选取新的可用后缀，不覆盖旧版本。即使较早编号被移走，已有带后缀的成功输出仍能被识别，不会重复导出。
 
-为避免覆盖，本版在本地输出目录内使用临时文件、独占任务锁和硬链接提交。请导出到支持硬链接的本地磁盘（例如 APFS/ext4），完成后再复制到播放器或 FAT/exFAT 存储卡。暂不直接导出到不支持硬链接的目标文件系统。
+为避免覆盖，本版在本地输出目录内使用临时文件、独占任务锁和硬链接提交。请导出到支持硬链接的本地磁盘（例如 NTFS/APFS/ext4），完成后再复制到播放器或 FAT/exFAT 存储卡。暂不直接导出到不支持硬链接的目标文件系统。
 
 普通中断会清理临时目录；下次导出会核对未完成提交，只移除日志证明属于该任务且内容未改变的部分输出。强制结束进程可能留下隐藏的 `.flac-mgr-stage-*` 临时目录，可在确认没有任务运行后手动清理。
 
@@ -96,3 +107,7 @@ music/
 音频在导出时完整解码校验，并核对 FLAC 音频 MD5（常规 8/16/24/32-bit 且 STREAMINFO 提供校验值时）。可运行 `python cli.py preview` 检查输入、目标规格及文件名。
 
 真实样本《爱情转移》已验证：24/192 转为 16/44.1，文件由约 157.3 MB 降至 27.8 MB，原始文件不变，封面及已有内嵌歌词保留。实际大小随音频和压缩配置变化。
+
+文件锁由 portalocker 调用各平台的系统锁实现；同一输出目录只允许一个导出进程，冲突时立即报错。进程退出或被终止后系统会释放锁，留存的 `lock` 文件无需删除。
+
+运行回归测试：`python -m unittest discover -s tests -v`。

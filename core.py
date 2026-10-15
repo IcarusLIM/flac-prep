@@ -17,6 +17,7 @@ import uuid
 
 from mutagen.flac import FLAC, Picture
 from PIL import Image
+import portalocker
 
 import audio
 
@@ -133,7 +134,7 @@ def verify_picture(data: bytes) -> tuple[int, int, str]:
 
 
 def state_dir(output: Path) -> Path:
-    identity = hashlib.sha256(str(output.resolve()).encode()).hexdigest()[:16]
+    identity = hashlib.sha256(os.path.normcase(str(output.resolve())).encode()).hexdigest()[:16]
     return output.parent / ".flac-mgr" / identity
 
 
@@ -342,8 +343,8 @@ def atomic_json(path: Path, value: dict):
 
 @contextmanager
 def output_lock(output: Path):
-    # macOS/Linux advisory lock is released by the OS even after an interrupted run.
-    import fcntl
+    # Use an OS lock, released even on process termination. Keep the lock file:
+    # deleting it could let concurrent processes lock different file objects.
     output.mkdir(parents=True, exist_ok=True)
     state = state_dir(output)
     if state.parent.is_symlink() or state.is_symlink():
@@ -355,15 +356,15 @@ def output_lock(output: Path):
     lock = state / "lock"
     if lock.is_symlink():
         raise ValueError("锁文件不能是符号链接")
-    with lock.open("a") as f:
+    with lock.open("a+b") as f:
         try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
+            portalocker.lock(f, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        except portalocker.exceptions.AlreadyLocked as exc:
             raise ValueError("另一个导出任务正在使用该输出目录") from exc
         try:
             yield
         finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+            portalocker.unlock(f)
 
 
 def recover(output: Path):
@@ -431,7 +432,7 @@ def execute(entry: Entry, output: Path, cfg: dict, exe: str, backend_version: st
             hashes = {n: sha256(stage / n) for n in names}
             identities = {n: [(stage / n).stat().st_dev, (stage / n).stat().st_ino] for n in names}
             for name in names:
-                with (stage / name).open("rb") as f:
+                with (stage / name).open("r+b") as f:
                     os.fsync(f.fileno())
             record = {"state": "prepared", "fingerprint": entry.fingerprint, "outputs": hashes,
                       "identities": identities,
