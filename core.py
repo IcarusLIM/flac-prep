@@ -63,7 +63,7 @@ def target_spec(rate: int, bits: int) -> tuple[int, int]:
 
 
 def config(compression: int) -> dict:
-    return {"version": __version__, "policy": "portable-flac-only-v2", "compression": compression,
+    return {"version": __version__, "policy": "portable-flac-lrc-v3", "compression": compression,
             "resampler": "soxr-vhq", "dither": "triangular", "noise_shaping": False,
             "peak_threshold_lsb": 8, "attenuated_peak_dbfs": -0.1}
 
@@ -81,6 +81,7 @@ class Entry:
     lrc: str | None = None
     lrc_text: str | None = None
     embed_lyrics: bool = False
+    export_lrc: bool = False
     cover: str | None = None
     fingerprint: str = ""
     processing: dict = field(default_factory=dict)
@@ -144,7 +145,7 @@ def record_path(output: Path, target: str) -> Path:
 
 
 def artifacts(entry: Entry) -> list[str]:
-    return [entry.target]
+    return [entry.target] + ([str(Path(entry.target).with_suffix(".lrc"))] if entry.export_lrc else [])
 
 
 def read_record(path: Path) -> dict:
@@ -207,8 +208,9 @@ def inspect(path: Path, cfg: dict) -> Entry:
                 entry.embed_lyrics = True
             elif lyrics.strip() != entry.lrc_text.strip():
                 entry.warnings.append("内嵌歌词和源 LRC 不同，保留已有内嵌歌词")
-        if not lyrics and not entry.embed_lyrics:
-            entry.warnings.append("无可用内嵌歌词")
+        entry.export_lrc = bool(lyrics or entry.embed_lyrics)
+        if not entry.export_lrc:
+            entry.warnings.append("无可用歌词，不生成 LRC")
         for picture in flac.pictures:
             verify_picture(picture.data)
         if not flac.pictures:
@@ -238,13 +240,20 @@ def inspect(path: Path, cfg: dict) -> Entry:
     return entry
 
 
-def plan(source: Path, output: Path, cfg: dict) -> list[Entry]:
+def plan(source: Path, output: Path, cfg: dict, progress=None) -> list[Entry]:
+    if progress:
+        progress("枚举文件", None, None, source)
     paths = list(files_under(source, output))
     entries = []
     flacs = {(p.parent, p.stem) for p in paths if p.suffix.lower() == ".flac"}
+    total = sum(p.suffix.lower() == ".flac" for p in paths)
+    current = 0
     for path in paths:
         ext = path.suffix.lower()
         if ext == ".flac":
+            current += 1
+            if progress:
+                progress("扫描并计算源文件哈希", current, total, path)
             entries.append(inspect(path, cfg))
         elif ext in OTHER_AUDIO:
             entries.append(Entry(str(path), "unsupported_format", reason="首版仅支持 FLAC"))
@@ -267,6 +276,8 @@ def plan(source: Path, output: Path, cfg: dict) -> list[Entry]:
             # Look up completed suffixed outputs first, even if an earlier name is now free.
             for target in records.get(entry.fingerprint, []):
                 entry.target = target
+                if progress:
+                    progress("校验已有输出", None, None, output / target)
                 if completed(entry, output):
                     entry.status = "already_done"
                     break
@@ -278,8 +289,8 @@ def plan(source: Path, output: Path, cfg: dict) -> list[Entry]:
                 if len(entry.target.encode("utf-8")) > 255 or len(entry.target.encode("utf-16-le")) // 2 > 255:
                     entry.status, entry.reason = "name_too_long", "添加后缀后文件名过长"
                     break
-                if key(entry.target) not in occupied:
-                    occupied.add(key(entry.target))
+                if not any(key(name) in occupied for name in artifacts(entry)):
+                    occupied.update(key(name) for name in artifacts(entry))
                     break
                 number += 1
             if any((output / n).resolve() in source_paths for n in artifacts(entry)):
@@ -423,6 +434,13 @@ def execute(entry: Entry, output: Path, cfg: dict, exe: str, backend_version: st
                 raise ValueError("无需音频转换的路径改变了 PCM")
             if action == "copy" and sha256(dest) != entry.inputs[entry.source]:
                 raise ValueError("复制校验失败")
+            if entry.export_lrc:
+                lyrics = embedded_lyrics(FLAC(dest))
+                if not lyrics:
+                    raise ValueError("目标 FLAC 缺少预期歌词")
+                # Encode directly to preserve the embedded text, including line endings
+                # on Windows. Do not copy a potentially different source sidecar.
+                dest.with_suffix(".lrc").write_bytes(lyrics.encode("utf-8"))
             assert_inputs(entry)
             names = artifacts(entry)
             # Recheck just before committing; os.link below additionally provides no-clobber semantics.

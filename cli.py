@@ -13,23 +13,36 @@ from core import __version__, OK, READY, atomic_json, config, execute, output_lo
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-def display(entries, as_json):
+def display(entries, as_json, *, summary=True, stream=None):
+    stream = sys.stdout if stream is None else stream
     if as_json:
-        print(json.dumps([e.public() for e in entries], ensure_ascii=False, indent=2))
+        print(json.dumps([e.public() for e in entries], ensure_ascii=False, indent=2), file=stream, flush=True)
         return
     for entry in entries:
         old, new = entry.source_spec, entry.target_spec
         spec = f' {old["bits"]}/{old["rate"]} → {new["bits"]}/{new["rate"]}' if old and new else ""
-        print(f"[{entry.status}]{spec} {entry.source}")
+        print(f"[{entry.status}]{spec} {entry.source}", file=stream)
         if entry.target:
-            print(f"  → {entry.target}")
+            print(f"  → {entry.target}", file=stream)
         if entry.embed_lyrics:
-            print(f"  补写内嵌歌词：{entry.lrc}")
+            print(f"  补写内嵌歌词：{entry.lrc}", file=stream)
         if entry.reason:
-            print(f"  {entry.reason}")
+            print(f"  {entry.reason}", file=stream)
         for warning in entry.warnings:
-            print(f"  提示：{warning}")
-    print("汇总：" + ", ".join(f"{k}={v}" for k, v in sorted(Counter(e.status for e in entries).items())))
+            print(f"  提示：{warning}", file=stream)
+        stream.flush()
+    if summary:
+        display_summary(entries, stream)
+
+
+def display_summary(entries, stream):
+    print("汇总：" + ", ".join(f"{k}={v}" for k, v in sorted(Counter(e.status for e in entries).items())),
+          file=stream, flush=True)
+
+
+def progress(stage, current, total, path):
+    count = f" {current}/{total}" if current is not None else ""
+    print(f"[{stage}{count}] {path}", file=sys.stderr, flush=True)
 
 
 def main(argv=None):
@@ -53,7 +66,7 @@ def main(argv=None):
         source, output = args.input.resolve(), args.output.resolve()
         cfg = config(args.compression)
         if args.command == "preview":
-            entries = plan(source, output, cfg)
+            entries = plan(source, output, cfg, progress=progress)
         else:
             # Check dependencies before creating the output tree.
             exe = audio.backend(args.ffmpeg)
@@ -62,16 +75,20 @@ def main(argv=None):
                 raise ValueError("导出必须使用独立于输入的目标目录")
             with output_lock(output):
                 recover(output)
-                entries = plan(source, output, cfg)
+                entries = plan(source, output, cfg, progress=progress)
                 for i, entry in enumerate(entries, 1):
                     if entry.status in READY:
                         print(f"[{i}/{len(entries)}] {entry.status}: {entry.target}", file=sys.stderr, flush=True)
                         execute(entry, output, cfg, exe, backend_version)
+                    display([entry], False, summary=False, stream=sys.stderr if args.json else sys.stdout)
                 report = state_dir(output) / "reports" / f"{uuid.uuid4().hex}.json"
                 atomic_json(report, {"created_at": datetime.now(timezone.utc).isoformat(),
                                      "config": cfg, "entries": [e.public() for e in entries]})
                 print(f"报告：{report}", file=sys.stderr)
-        display(entries, args.json)
+        if args.command == "preview" or args.json:
+            display(entries, args.json)
+        else:
+            display_summary(entries, sys.stdout)
         acceptable = OK | READY | {"unpaired_lrc"}
         return 1 if any(e.status not in acceptable for e in entries) else 0
     except KeyboardInterrupt:
